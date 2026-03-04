@@ -1,0 +1,47 @@
+version: '3'
+
+services:
+  mysql:
+    image: mysql:5.7
+    container_name: lnmp_mysql
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 517127
+      MYSQL_DATABASE: wordpress
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+    networks:
+      - lnmp_network
+
+  php:
+    image: php:7.4-fpm
+    container_name: lnmp_php
+    restart: always
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./html:/var/www/html
+    networks:
+      - lnmp_network
+    depends_on:
+      - mysql
+
+  nginx:
+    image: nginx:alpine
+    container_name: lnmp_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./html:/var/www/html
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    networks:
+      - lnmp_network
+    depends_on:
+      - php
+
+networks:
+  lnmp_network:
+    driver: bridge
