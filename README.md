@@ -603,3 +603,123 @@ docker/build-push-action：构建并推送镜像，file 指定我们刚才创建
 6.验证 CI/CD 运行结果
 - 等待工作流完成，所有步骤应为绿色（成功）。
 - 登录 Docker Hub，查看是否出现了两个镜像仓库：lnmp-nginx 和 lnmp-php，且都有 latest 标签
+
+7.验证镜像是否存在
+- 命令：docker pull xiaoqiushui17/lnmp-nginx:latest
+     docker pull xiaoqiushui17/lnmp-php:latest
+第六步：配置邮件告警（使用 ssmtp 发送邮件（轻量级））
+1.安装 ssmtp
+- 命令：yum install -y ssmtp
+2.配置 ssmtp
+-命令： vim /etc/ssmtp/ssmtp.conf
+内容- ：
+root=cy5277fsq@163.com
+mailhub=smtp.163.com:465
+AuthUser=cy5277fsq@163.com
+AuthPass=我的16位网易邮件授权码
+UseTLS=YES
+UseSTARTTLS=NO
+FromLineOverride=YES
+3.配置重写地址
+- 命令：vim /etc/ssmtp/revaliases
+- 内容：添加：root:cy5277fsq@163.com:smtp.163.com:465
+4.测试发送
+- 命令：echo "测试告警" | ssmtp -v cy5277fsq@163.com
+5.修改监控脚本
+- 命令：vim /root/docker-lnmp-project/scripts/monitor.sh
+- 内容：
+else
+            log "错误：重启容器 $container 失败！"
+            echo "容器 $container 重启失败，请立即检查！" | ssmtp cy5277fsq@163.com
+        fi
+（直接在 log "错误：重启容器 $container 失败！" 后面添加一行邮件发送命令即可）
+6.正确测试步骤
+（1）让容器无法启动
+- 作用：停止容器后，暂时把它改名，这样 docker start 会因为找不到容器而失败
+- 命令：docker stop lnmp_nginx && docker rename lnmp_nginx lnmp_nginx_bak
+（2）运行监控脚本
+- 命令：cd /root/docker-lnmp-project/scripts && ./monitor.sh
+（3）查看结果
+检查邮箱是否收到主题为“容器重启告警”的邮件
+查看监控日志：cat monitor.log
+查看告警日志：cat alert.log
+（4）恢复容器
+- 命令：docker rename lnmp_nginx_bak lnmp_nginx && docker start lnmp_nginx
+（5）手动测试
+-命令：container="lnmp_nginx"; echo -e "Subject: 容器重启告警\n\n容器 $container 重启失败，请立即检查！" | ssmtp cy5277fsq@163.com
+第七步：CD 持续部署：让 GitHub Actions 自动登录服务器并 docker-compose pull && up -d
+1.部署 Watchtower 实现 CD
+- 命令：docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --interval 30 
+- 解释：-d：后台运行。
+--name watchtower：容器名称。
+-v /var/run/docker.sock:/var/run/docker.sock：允许 Watchtower 与 Docker 守护进程通信，从而管理容器。
+--interval 30：每 30 秒检查一次镜像更新。
+2.验证 Watchtower 是否工作
+- 命令：docker logs watchtower --tail 20
+3.测试完整 CI/CD 流程
+- 命令：git add html/index.php
+git commit -m "测试自动更新"
+git push
+4.观察 watchtower 日志
+- 命令：docker logs watchtower --tail 20
+5.验证网站更新
+- 命令：curl http://localhost
+6.浏览器访问html/index.php：http://192.168.10.17
+7.改用我的自定义镜像
+#查看镜像是否存在：docker images | grep lnmp-php（不存在就拉取）
+- 命令：cd /root/docker-lnmp-project
+vim docker-compose.yml
+#将 php 服务的 image 改为我的自定义镜像：
+php:
+  image: xiaoqiushui17/lnmp-php:latest
+#将 nginx 服务改为自定义镜像：
+nginx:
+  image: xiaoqiushui17/lnmp-nginx:latest
+8.重启容器
+- 命令：docker-compose down
+docker-compose up -d
+9.创建 app_user 用户
+- 命令：docker-compose exec mysql mysql -uroot -p517127 -e "CREATE USER IF NOT EXISTS 'app_user'@'%' IDENTIFIED BY '517127';"
+10.创建 lnmp_app 数据库
+- 命令：docker-compose exec mysql mysql -uroot -p517127 -e "CREATE DATABASE IF NOT EXISTS lnmp_app;"
+11.授权 app_user 访问 lnmp_app
+- 命令：docker-compose exec mysql mysql -uroot -p517127 -e "GRANT ALL PRIVILEGES ON lnmp_app.* TO 'app_user'@'%'; FLUSH PRIVILEGES;"
+12.测试 app_user 连接
+- 命令：docker-compose exec php php -r "\$conn = new mysqli('mysql', 'app_user', '517127', 'lnmp_app'); echo \$conn->connect_error ? '连接失败: ' . \$conn->connect_error : '连接成功';"
+13.访问 db.php
+- 命令：curl http://localhost/db.php
+#浏览器访问：http://192.168.10.17/db.php
+------------------------------------------
+## 遇到的问题及解决方法
+1. 邮件告警配置失败（mailx + NSS）
+#问题：使用 mailx 发送邮件时，始终报错 Missing "nss-config-dir" variable，即使安装了 NSS 并配置了证书数据库，仍然无法发送。
+#原因：CentOS 7 上的 mailx 对 NSS 依赖较高，且配置复杂；网易邮箱的 SMTP 服务器要求加密，但证书验证环节难以通过。
+#解决：改用轻量级 ssmtp 替代 mailx，配置简单且不依赖 NSS。修改 /etc/ssmtp/ssmtp.conf 并测试成功，最终集成到监控脚本中，实现容器重启失败时发送邮件告警。
+2. MySQL 连接失败：Access denied for user 'app_user'
+#问题：访问 db.php 时报错 Connection refused 或 Access denied，PHP 无法连接 MySQL。
+#排查：
+检查 MySQL 容器运行状态：正常。
+用 root 用户测试连接：成功，说明网络没问题。
+查看 MySQL 用户表：发现 app_user 不存在。
+#解决：创建 app_user 用户并授权：
+CREATE USER 'app_user'@'%' IDENTIFIED BY '517127';
+CREATE DATABASE lnmp_app;
+GRANT ALL PRIVILEGES ON lnmp_app.* TO 'app_user'@'%';
+FLUSH PRIVILEGES;
+之后 db.php 正常返回“MySQL 连接成功”。
+3. Grafana 监控页面数据突然消失
+#问题：打开 Grafana 仪表盘时，所有图表无数据。
+#原因：不小心将时间范围选成了未来时间段（如从“今天”到“明天”），导致无数据。
+#解决：点击右上角时间选择器，重置为 Last 15 minutes 或 Last 1 hour，数据立即恢复。
+4. PHP 容器缺少 mysqli 扩展
+#问题：切换镜像后，db.php 报错 Class 'mysqli' not found。
+#原因：官方 php:7.4-fpm 镜像默认未安装 mysqli 扩展，而自定义镜像中已包含，但 docker-compose.yml 中仍使用官方镜像。
+#解决：修改 docker-compose.yml，将 PHP 服务的镜像改为自定义镜像 xiaoqiushui17/lnmp-php:latest（通过 CI/CD 构建），重启容器后正常。
+5. GitHub 推送失败（网络原因）
+#问题：git push 时报错 Failed connect to github.com:443; Connection refused。
+#解决：国内网络访问 GitHub 不稳定，尝试多次或使用手机热点后成功；也可改用 Gitee 作为备选。
+6. Watchtower 部署
+#问题：初次运行 watchtower 容器时，需要拉取镜像，并确保正确挂载 docker.sock。
+#解决：直接使用命令启动：
+docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --interval 30
+之后验证日志，确认每30秒检查一次镜像更新。

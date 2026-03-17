@@ -4,3 +4,4 @@ mysql/data/
 backups/
 # 忽略日志文件
 *.log
+scripts/monitor.log

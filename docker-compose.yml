@@ -16,7 +16,7 @@ services:
       - lnmp_network
 
   php:
-    image: php:7.4-fpm
+    image: xiaoqiushui17/lnmp-php:latest
     container_name: lnmp_php
     restart: always
     volumes:
@@ -27,7 +27,7 @@ services:
       - mysql
 
   nginx:
-    image: nginx:alpine
+    image: xiaoqiushui17/lnmp-nginx:latest
     container_name: lnmp_nginx
     restart: always
     ports:
