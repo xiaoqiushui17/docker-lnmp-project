@@ -446,4 +446,160 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 告警：$MESSAGE" >> $LOG_FILE
 - **解决**：脚本中增加 `mkdir -p` 自动创建目录
 - **启示**：脚本需考虑健壮性，自动创建依赖目录
 
-
+-----------------------------------------
+完善——>1.添加 Prometheus + Grafana 监控
+作用：实时监控宿主机和容器的性能指标（CPU、内存、磁盘、网络等），并通过 Grafana 可视化仪表盘展示，替代你目前的简单监控脚本，让监控更专业、更直观。
+新增组件：
+Prometheus：监控数据采集和存储
+Grafana：数据可视化展示
+Node Exporter：采集宿主机指标（CPU、内存、磁盘等）
+2.添加 CI/CD（GitHub Actions）
+作用：每次你推送代码到 GitHub 时，自动构建自定义 Docker 镜像并推送到 Docker Hub，展示自动化部署能力。
+新增组件：
+GitHub Actions workflow 文件
+---------------------------------------
+第一步：备份当前的 docker-compose.yml（保险点）
+- 命令：cp docker-compose.yml docker-compose.yml.bak.$(date +%Y%m%d)
+第二步：编辑 docker-compose.yml 添加监控服务
+1.在最后一行也就是networks:之前加：
+prometheus:
+  image: prom/prometheus:latest
+  container_name: prometheus
+  restart: always
+  volumes:
+    - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    - prometheus_data:/prometheus
+  ports:
+    - "9090:9090"
+  networks:
+    - lnmp_network
+grafana:
+  image: grafana/grafana:latest
+  container_name: grafana
+  restart: always
+  ports:
+    - "3000:3000"
+  environment:
+    - GF_SECURITY_ADMIN_PASSWORD=admin
+  volumes:
+    - grafana_data:/var/lib/grafana
+  networks:
+    - lnmp_network
+node-exporter:
+  image: prom/node-exporter:latest
+  container_name: node-exporter
+  restart: always
+  ports:
+    - "9100:9100"
+  networks:
+- lnmp_network
+2.在文件末尾添加 volumes 定义：
+volumes:
+  prometheus_data:
+  grafana_data:
+3.检查语法
+- 命令：docker-compose config
+第三步：创建 Prometheus 配置文件（告诉它要监控哪些目标，然后启动监控服务）
+1.创建配置目录
+- 命令：mkdir -p /root/docker-lnmp-project/prometheus
+- 作用：这个目录用来存放 Prometheus 的配置文件
+2.创建配置文件
+- 命令：vim /root/docker-lnmp-project/prometheus/prometheus.yml
+- 内容：
+global:
+  scrape_interval: 15s      # 每15秒采集一次数据
+  evaluation_interval: 15s  # 每15秒评估一次告警规则（本例未设置告警）
+scrape_configs:
+  - job_name: 'prometheus'   # 监控任务名称：采集 Prometheus 自身指标
+    static_configs:
+      - targets: ['localhost:9090']  # 目标地址：Prometheus 本机9090端口
+  - job_name: 'node-exporter' # 监控任务：采集宿主机指标（CPU、内存等）
+    static_configs:
+      - targets: ['node-exporter:9100'] # 目标地址：node-exporter 容器9100端口
+- 解释：global：全局配置，适用于所有监控任务。
+scrape_configs：定义要监控的目标列表。
+node-exporter:9100：通过容器名称 node-exporter 访问，因为它们在同一个 Docker 网络中，可以直接用容器名通信。
+3.启动新增的三个监控服务
+- 命令：docker-compose up -d prometheus grafana node-exporter
+4.检查容器状态
+- 命令：docker-compose ps
+5.验证 Prometheus 是否正常
+- 命令：curl http://localhost:9090
+第四步：配置 Grafana 数据源并导入仪表盘
+1.检查 Grafana 是否可访问
+- 命令：curl -I http://localhost:3000
+2.打开浏览器访问 Grafana
+- 命令：http://192.168.10.17:3000（用户名：admin，密码：517127）
+3.添加 Prometheus 数据源
+- 操作：connections——>data sources——>add new data sources——>选择prometheus——>在 HTTP 栏的 URL 输入：http://prometheus:9090（因为 Grafana 和 Prometheus 在同一个 Docker 网络中，可以直接用容器名通信）——>滚动到底部，点击 Save & Test。
+4.导入 Node Exporter 仪表盘
+- 操作：dashborads——>new——>import——>在 Import via grafana.com 输入框里输入仪表盘 ID：1860（这是 Node Exporter Full 仪表盘，专门用来展示 node-exporter 采集的宿主机指标）——>Load——>Prometheus 数据源选择刚才添加的 Prometheus——>import。
+第五步：添加 CI/CD（GitHub Actions）
+1.在项目根目录创建 Dockerfile（用于构建自定义镜像）
+- 作用：我们为 Nginx 和 PHP 分别创建 Dockerfile，将你现有的配置打包进镜像，这样以后可以直接使用这些镜像部署，而不需要挂载配置文件。
+（1）创建 Nginx 的 Dockerfile
+- 命令：cd /root/docker-lnmp-project && vim Dockerfile.nginx
+- 内容：
+FROM nginx:alpine
+COPY nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
+COPY html /usr/share/nginx/html
+- 解释：FROM nginx:alpine：基于官方 nginx:alpine 镜像
+COPY nginx/conf.d/default.conf：把自定义的 Nginx 配置复制到镜像内
+COPY html：把网站文件复制到镜像内，这样镜像本身就包含了静态文件
+（2）创建 PHP 的 Dockerfile
+- 命令：vim Dockerfile.php
+- 内容：FROM php:7.4-fpm
+RUN docker-php-ext-install mysqli
+COPY html /var/www/html
+- 解释：FROM php:7.4-fpm：基于官方 PHP 7.4 FPM 镜像
+RUN docker-php-ext-install mysqli：安装 mysqli 扩展（解决你之前遇到的故障）
+COPY html：把网站文件复制到镜像内
+2.创建 GitHub Actions 工作流文件
+- 命令：mkdir -p .github/workflows  && vim .github/workflows/docker-build.yml
+- 内容：
+name: Build and Push Docker Images
+on:
+  push:
+    branches: [ main ]   # 当推送到 main 分支时触发
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and push Nginx image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.nginx
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/lnmp-nginx:latest
+      - name: Build and push PHP image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.php
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/lnmp-php:latest
+- 解释：on.push.branches：触发分支，这里是 main
+jobs.build.steps：定义了构建步骤
+docker/login-action：登录 Docker Hub，需要提供用户名和密码（通过 GitHub Secrets 传入，确保安全）
+docker/build-push-action：构建并推送镜像，file 指定我们刚才创建的 Dockerfile，tags 指定镜像标签
+3.将新增文件提交到本地 Git 仓库
+- 命令：git add .github/ Dockerfile.nginx Dockerfile.php
+        git commit -m "Add CI/CD: GitHub Actions for building Docker images"
+4.在 GitHub 仓库中配置 Secrets（敏感信息）
+- 作用：我们需要把 Docker Hub 的用户名和密码（或访问令牌）以加密方式存储在 GitHub 仓库中，供 Actions 使用
+- 操作：进入我的docker-lnmp-project仓库——>Settings——>Secrets and variables——>Actions——>New repository secret——>Name 输入：DOCKER_USERNAME——>Secret 输入：Docker Hub 用户名（xiaoqiushui17）——>Add secret——>再次点击New repository secret——>Name 输入：DOCKER_PASSWORD——>Secret 输入： Docker Hub 密码
+5.推送代码到 GitHub 触发 CI/CD
+- 命令：git push（推送成功后，可以在 GitHub 仓库的 Actions 标签页看到正在运行的工作流。点击进去可以查看实时日志）
+6.验证 CI/CD 运行结果
+- 等待工作流完成，所有步骤应为绿色（成功）。
+- 登录 Docker Hub，查看是否出现了两个镜像仓库：lnmp-nginx 和 lnmp-php，且都有 latest 标签
