@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s      # 每15秒采集一次数据
+  evaluation_interval: 15s  # 每15秒评估一次告警规则（本例未设置告警）
+
+scrape_configs:
+  - job_name: 'prometheus'   # 监控任务名称：采集 Prometheus 自身指标
+    static_configs:
+      - targets: ['localhost:9090']  # 目标地址：Prometheus 本机9090端口
+
+  - job_name: 'node-exporter' # 监控任务：采集宿主机指标（CPU、内存等）
+    static_configs:
+      - targets: ['node-exporter:9100'] # 目标地址：node-exporter 容器9100端口

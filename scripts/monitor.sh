@@ -29,6 +29,8 @@ for container in "${CONTAINERS[@]}"; do
             log "成功重启容器 $container"
         else
             log "错误：重启容器 $container 失败！"
+    echo -e "Subject: 容器重启告警\n\n容器 $container 重启失败，请立即检查！" | ssmtp cy5277fsq@163.com
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 告警：容器 $container 重启失败" >> /root/docker-lnmp-project/scripts/alert.log
         fi
     else
         log "正常：容器 $container 正在运行"
